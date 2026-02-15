@@ -1,13 +1,18 @@
 #if !MESHTASTIC_EXCLUDE_WEBSERVER
+#include "MeshService.h"
 #include "NodeDB.h"
 #include "PowerFSM.h"
 #include "RadioLibInterface.h"
+#include "Router.h"
 #include "airtime.h"
 #include "main.h"
 #include "mesh/http/ContentHelper.h"
 #include "mesh/http/WebServer.h"
 #if HAS_WIFI
 #include "mesh/wifi/WiFiAPClient.h"
+#endif
+#if HAS_SCREEN
+#include "MessageStore.h"
 #endif
 #include "SPILock.h"
 #include "power.h"
@@ -16,6 +21,11 @@
 #include <HTTPBodyParser.hpp>
 #include <HTTPMultipartBodyParser.hpp>
 #include <HTTPURLEncodedBodyParser.hpp>
+#include <cerrno>
+#include <climits>
+#include <cstdlib>
+#include <cstring>
+#include <vector>
 
 #ifdef ARCH_ESP32
 #include "esp_task_wdt.h"
@@ -66,6 +76,143 @@ char const *contentTypes[][2] = {{".txt", "text/plain"},     {".html", "text/htm
 // Our API to handle messages to and from the radio.
 HttpAPI webAPI;
 
+namespace {
+
+constexpr size_t MAX_CHAT_JSON_BODY = 768;
+constexpr size_t MAX_CHAT_LIMIT = 100;
+constexpr size_t DEFAULT_CHAT_LIMIT = 30;
+constexpr size_t MAX_CONFIG_JSON_BODY = 640;
+
+void setJsonCorsHeaders(HTTPResponse *res, const char *methods)
+{
+    res->setHeader("Content-Type", "application/json");
+    res->setHeader("Access-Control-Allow-Origin", "*");
+    res->setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res->setHeader("Access-Control-Allow-Methods", methods);
+}
+
+void writeJsonStatus(HTTPResponse *res, int statusCode, const char *status, const char *errorMessage = nullptr)
+{
+    res->setStatusCode(statusCode);
+    JSONObject root;
+    root["status"] = new JSONValue(status);
+    if (errorMessage) {
+        root["error"] = new JSONValue(errorMessage);
+    }
+    JSONValue payload(root);
+    std::string json = payload.Stringify();
+    res->print(json.c_str());
+}
+
+bool parseUint32String(const std::string &raw, uint32_t &out, bool allowNodeIdPrefix = false)
+{
+    if (raw.empty()) {
+        return false;
+    }
+
+    const char *str = raw.c_str();
+    int base = 10;
+
+    if (allowNodeIdPrefix && str[0] == '!') {
+        str++;
+        base = 16;
+    } else if ((raw.size() > 2) && (str[0] == '0') && ((str[1] == 'x') || (str[1] == 'X'))) {
+        str += 2;
+        base = 16;
+    }
+
+    if (*str == '\0') {
+        return false;
+    }
+
+    errno = 0;
+    char *end = nullptr;
+    const unsigned long parsed = strtoul(str, &end, base);
+    if (errno != 0 || end == str || (end && *end != '\0') || parsed > UINT32_MAX) {
+        return false;
+    }
+
+    out = static_cast<uint32_t>(parsed);
+    return true;
+}
+
+bool parseNodeNumValue(const JSONValue *v, uint32_t &out)
+{
+    if (!v) {
+        return false;
+    }
+    if (v->IsNumber()) {
+        const double num = v->AsNumber();
+        if (num < 0 || num > UINT32_MAX) {
+            return false;
+        }
+        out = static_cast<uint32_t>(num);
+        return true;
+    }
+    if (v->IsString()) {
+        return parseUint32String(v->AsString(), out, true);
+    }
+    return false;
+}
+
+bool parseBoolString(const std::string &s, bool &out)
+{
+    if (s == "1" || s == "true" || s == "TRUE" || s == "yes") {
+        out = true;
+        return true;
+    }
+    if (s == "0" || s == "false" || s == "FALSE" || s == "no") {
+        out = false;
+        return true;
+    }
+    return false;
+}
+
+bool parseBoolValue(const JSONValue *v, bool &out)
+{
+    if (!v) {
+        return false;
+    }
+    if (v->IsBool()) {
+        out = v->AsBool();
+        return true;
+    }
+    if (v->IsString()) {
+        return parseBoolString(v->AsString(), out);
+    }
+    if (v->IsNumber()) {
+        const double n = v->AsNumber();
+        if (n == 0.0) {
+            out = false;
+            return true;
+        }
+        if (n == 1.0) {
+            out = true;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool copyBoundedString(const std::string &src, char *dest, size_t destSize)
+{
+    if (!dest || destSize == 0 || src.size() >= destSize) {
+        return false;
+    }
+    strncpy(dest, src.c_str(), destSize);
+    dest[destSize - 1] = '\0';
+    return true;
+}
+
+void maybeScheduleReboot(bool rebootRequested)
+{
+    if (rebootRequested) {
+        rebootAtMsec = millis() + 5000;
+    }
+}
+
+} // namespace
+
 void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
 {
 
@@ -93,6 +240,13 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
     ResourceNode *nodeJsonScanNetworks = new ResourceNode("/json/scanNetworks", "GET", &handleScanNetworks);
     ResourceNode *nodeJsonReport = new ResourceNode("/json/report", "GET", &handleReport);
     ResourceNode *nodeJsonNodes = new ResourceNode("/json/nodes", "GET", &handleNodes);
+    ResourceNode *nodeJsonNodeConfigOptions = new ResourceNode("/json/config/node", "OPTIONS", &handleJsonNodeConfig);
+    ResourceNode *nodeJsonNodeConfigGet = new ResourceNode("/json/config/node", "GET", &handleJsonNodeConfig);
+    ResourceNode *nodeJsonNodeConfigPost = new ResourceNode("/json/config/node", "POST", &handleJsonNodeConfig);
+    ResourceNode *nodeJsonChatSendOptions = new ResourceNode("/json/chat/send", "OPTIONS", &handleJsonChatSend);
+    ResourceNode *nodeJsonChatSend = new ResourceNode("/json/chat/send", "POST", &handleJsonChatSend);
+    ResourceNode *nodeJsonChatMessagesOptions = new ResourceNode("/json/chat/messages", "OPTIONS", &handleJsonChatMessages);
+    ResourceNode *nodeJsonChatMessages = new ResourceNode("/json/chat/messages", "GET", &handleJsonChatMessages);
     ResourceNode *nodeJsonFsBrowseStatic = new ResourceNode("/json/fs/browse/static", "GET", &handleFsBrowseStatic);
     ResourceNode *nodeJsonDelete = new ResourceNode("/json/fs/delete/static", "DELETE", &handleFsDeleteStatic);
 
@@ -112,6 +266,13 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
     secureServer->registerNode(nodeJsonDelete);
     secureServer->registerNode(nodeJsonReport);
     secureServer->registerNode(nodeJsonNodes);
+    secureServer->registerNode(nodeJsonNodeConfigOptions);
+    secureServer->registerNode(nodeJsonNodeConfigGet);
+    secureServer->registerNode(nodeJsonNodeConfigPost);
+    secureServer->registerNode(nodeJsonChatSendOptions);
+    secureServer->registerNode(nodeJsonChatSend);
+    secureServer->registerNode(nodeJsonChatMessagesOptions);
+    secureServer->registerNode(nodeJsonChatMessages);
     //    secureServer->registerNode(nodeUpdateFs);
     //    secureServer->registerNode(nodeDeleteFs);
     secureServer->registerNode(nodeAdmin);
@@ -133,6 +294,14 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
     insecureServer->registerNode(nodeJsonFsBrowseStatic);
     insecureServer->registerNode(nodeJsonDelete);
     insecureServer->registerNode(nodeJsonReport);
+    insecureServer->registerNode(nodeJsonNodes);
+    insecureServer->registerNode(nodeJsonNodeConfigOptions);
+    insecureServer->registerNode(nodeJsonNodeConfigGet);
+    insecureServer->registerNode(nodeJsonNodeConfigPost);
+    insecureServer->registerNode(nodeJsonChatSendOptions);
+    insecureServer->registerNode(nodeJsonChatSend);
+    insecureServer->registerNode(nodeJsonChatMessagesOptions);
+    insecureServer->registerNode(nodeJsonChatMessages);
     //    insecureServer->registerNode(nodeUpdateFs);
     //    insecureServer->registerNode(nodeDeleteFs);
     insecureServer->registerNode(nodeAdmin);
@@ -231,6 +400,501 @@ void handleAPIv1ToRadio(HTTPRequest *req, HTTPResponse *res)
 
     res->write(buffer, s);
     LOG_DEBUG("webAPI handleAPIv1ToRadio");
+}
+
+void handleJsonChatSend(HTTPRequest *req, HTTPResponse *res)
+{
+    if (webServerThread)
+        webServerThread->markActivity();
+
+    setJsonCorsHeaders(res, "POST, OPTIONS");
+
+    if (req->getMethod() == "OPTIONS") {
+        res->setStatusCode(204);
+        res->print("");
+        return;
+    }
+
+    if (!service || !router) {
+        writeJsonStatus(res, 503, "error", "mesh_not_ready");
+        return;
+    }
+
+    const std::string contentLength = req->getHeader("Content-Length");
+    if (!contentLength.empty()) {
+        uint32_t requestLen = 0;
+        if (parseUint32String(contentLength, requestLen) && requestLen > MAX_CHAT_JSON_BODY) {
+            writeJsonStatus(res, 413, "error", "request_too_large");
+            return;
+        }
+    }
+
+    char body[MAX_CHAT_JSON_BODY + 1];
+    const size_t bodyLen = req->readBytes(reinterpret_cast<byte *>(body), MAX_CHAT_JSON_BODY);
+    body[bodyLen] = '\0';
+
+    if (bodyLen == 0) {
+        writeJsonStatus(res, 400, "error", "missing_body");
+        return;
+    }
+
+    std::unique_ptr<JSONValue> parsed(JSON::Parse(body));
+    if (!parsed || !parsed->IsObject()) {
+        writeJsonStatus(res, 400, "error", "invalid_json");
+        return;
+    }
+
+    JSONObject json = parsed->AsObject();
+    const auto textIt = json.find("text");
+    if (textIt == json.end() || !textIt->second->IsString()) {
+        writeJsonStatus(res, 400, "error", "field_text_required");
+        return;
+    }
+
+    const std::string text = textIt->second->AsString();
+    if (text.empty()) {
+        writeJsonStatus(res, 400, "error", "field_text_empty");
+        return;
+    }
+
+    meshtastic_MeshPacket packet = meshtastic_MeshPacket_init_zero;
+    packet.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
+    packet.decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
+    packet.channel = 0;
+    packet.to = NODENUM_BROADCAST;
+    packet.decoded.dest = NODENUM_BROADCAST;
+    packet.want_ack = false;
+
+    auto chanIt = json.find("channel");
+    if (chanIt != json.end()) {
+        if (!chanIt->second->IsNumber()) {
+            writeJsonStatus(res, 400, "error", "field_channel_invalid");
+            return;
+        }
+
+        const double ch = chanIt->second->AsNumber();
+        if (ch < 0 || ch >= channels.getNumChannels() || static_cast<uint32_t>(ch) != ch) {
+            writeJsonStatus(res, 400, "error", "field_channel_out_of_range");
+            return;
+        }
+        packet.channel = static_cast<uint8_t>(ch);
+    }
+
+    auto toIt = json.find("to");
+    if (toIt != json.end()) {
+        uint32_t to = 0;
+        if (!parseNodeNumValue(toIt->second, to) || to == 0) {
+            writeJsonStatus(res, 400, "error", "field_to_invalid");
+            return;
+        }
+        packet.to = to;
+        packet.decoded.dest = to;
+        packet.want_ack = (to != NODENUM_BROADCAST);
+    }
+
+    auto wantAckIt = json.find("wantAck");
+    if (wantAckIt != json.end()) {
+        if (wantAckIt->second->IsBool()) {
+            packet.want_ack = wantAckIt->second->AsBool();
+        } else if (wantAckIt->second->IsString()) {
+            bool parsedBool = false;
+            if (!parseBoolString(wantAckIt->second->AsString(), parsedBool)) {
+                writeJsonStatus(res, 400, "error", "field_wantAck_invalid");
+                return;
+            }
+            packet.want_ack = parsedBool;
+        } else {
+            writeJsonStatus(res, 400, "error", "field_wantAck_invalid");
+            return;
+        }
+    }
+
+    auto hopLimitIt = json.find("hopLimit");
+    if (hopLimitIt != json.end()) {
+        if (!hopLimitIt->second->IsNumber()) {
+            writeJsonStatus(res, 400, "error", "field_hopLimit_invalid");
+            return;
+        }
+        const double hopLimit = hopLimitIt->second->AsNumber();
+        if (hopLimit < 0 || hopLimit > UINT8_MAX || static_cast<uint32_t>(hopLimit) != hopLimit) {
+            writeJsonStatus(res, 400, "error", "field_hopLimit_out_of_range");
+            return;
+        }
+        packet.hop_limit = static_cast<uint8_t>(hopLimit);
+    }
+
+    if (text.length() > sizeof(packet.decoded.payload.bytes)) {
+        writeJsonStatus(res, 413, "error", "text_too_long");
+        return;
+    }
+
+    memcpy(packet.decoded.payload.bytes, text.c_str(), text.length());
+    packet.decoded.payload.size = text.length();
+
+    service->handleToRadio(packet);
+
+    JSONObject data;
+    data["packet_id"] = new JSONValue((double)packet.id);
+    data["to"] = new JSONValue((double)packet.to);
+    data["channel"] = new JSONValue((int)packet.channel);
+    data["want_ack"] = new JSONValue(packet.want_ack);
+
+    JSONObject root;
+    root["status"] = new JSONValue("ok");
+    root["data"] = new JSONValue(data);
+    JSONValue response(root);
+    std::string jsonString = response.Stringify();
+    res->print(jsonString.c_str());
+}
+
+void handleJsonNodeConfig(HTTPRequest *req, HTTPResponse *res)
+{
+    if (webServerThread)
+        webServerThread->markActivity();
+
+    setJsonCorsHeaders(res, "GET, POST, OPTIONS");
+
+    const std::string method = req->getMethod();
+    if (method == "OPTIONS") {
+        res->setStatusCode(204);
+        res->print("");
+        return;
+    }
+
+    if (method == "GET") {
+        JSONObject ownerJson;
+        ownerJson["id"] = new JSONValue(owner.id);
+        ownerJson["long_name"] = new JSONValue(owner.long_name);
+        ownerJson["short_name"] = new JSONValue(owner.short_name);
+        ownerJson["node_num"] = new JSONValue((double)nodeDB->getNodeNum());
+
+        JSONObject wifiJson;
+        wifiJson["enabled"] = new JSONValue(config.network.wifi_enabled);
+        wifiJson["ssid"] = new JSONValue(config.network.wifi_ssid);
+        wifiJson["psk_set"] = new JSONValue(config.network.wifi_psk[0] != '\0');
+
+        JSONObject data;
+        data["owner"] = new JSONValue(ownerJson);
+        data["wifi"] = new JSONValue(wifiJson);
+
+        JSONObject root;
+        root["status"] = new JSONValue("ok");
+        root["data"] = new JSONValue(data);
+        JSONValue response(root);
+        std::string json = response.Stringify();
+        res->print(json.c_str());
+        return;
+    }
+
+    if (method != "POST") {
+        writeJsonStatus(res, 405, "error", "method_not_allowed");
+        return;
+    }
+
+    const std::string contentLength = req->getHeader("Content-Length");
+    if (!contentLength.empty()) {
+        uint32_t requestLen = 0;
+        if (parseUint32String(contentLength, requestLen) && requestLen > MAX_CONFIG_JSON_BODY) {
+            writeJsonStatus(res, 413, "error", "request_too_large");
+            return;
+        }
+    }
+
+    char body[MAX_CONFIG_JSON_BODY + 1];
+    const size_t bodyLen = req->readBytes(reinterpret_cast<byte *>(body), MAX_CONFIG_JSON_BODY);
+    body[bodyLen] = '\0';
+    if (bodyLen == 0) {
+        writeJsonStatus(res, 400, "error", "missing_body");
+        return;
+    }
+
+    std::unique_ptr<JSONValue> parsed(JSON::Parse(body));
+    if (!parsed || !parsed->IsObject()) {
+        writeJsonStatus(res, 400, "error", "invalid_json");
+        return;
+    }
+
+    JSONObject json = parsed->AsObject();
+    bool ownerChanged = false;
+    bool wifiChanged = false;
+    bool hasAnyField = false;
+
+    auto longNameIt = json.find("longName");
+    if (longNameIt != json.end()) {
+        hasAnyField = true;
+        if (!longNameIt->second->IsString()) {
+            writeJsonStatus(res, 400, "error", "field_longName_invalid");
+            return;
+        }
+        const std::string longName = longNameIt->second->AsString();
+        if (!copyBoundedString(longName, owner.long_name, sizeof(owner.long_name))) {
+            writeJsonStatus(res, 400, "error", "field_longName_too_long");
+            return;
+        }
+        ownerChanged = true;
+    }
+
+    auto shortNameIt = json.find("shortName");
+    if (shortNameIt != json.end()) {
+        hasAnyField = true;
+        if (!shortNameIt->second->IsString()) {
+            writeJsonStatus(res, 400, "error", "field_shortName_invalid");
+            return;
+        }
+        const std::string shortName = shortNameIt->second->AsString();
+        if (!copyBoundedString(shortName, owner.short_name, sizeof(owner.short_name))) {
+            writeJsonStatus(res, 400, "error", "field_shortName_too_long");
+            return;
+        }
+        ownerChanged = true;
+    }
+
+    auto wifiEnabledIt = json.find("wifiEnabled");
+    if (wifiEnabledIt != json.end()) {
+        hasAnyField = true;
+        bool enabled = false;
+        if (!parseBoolValue(wifiEnabledIt->second, enabled)) {
+            writeJsonStatus(res, 400, "error", "field_wifiEnabled_invalid");
+            return;
+        }
+        if (config.network.wifi_enabled != enabled) {
+            config.network.wifi_enabled = enabled;
+            wifiChanged = true;
+        }
+    }
+
+    auto wifiSsidIt = json.find("wifiSsid");
+    if (wifiSsidIt != json.end()) {
+        hasAnyField = true;
+        if (!wifiSsidIt->second->IsString()) {
+            writeJsonStatus(res, 400, "error", "field_wifiSsid_invalid");
+            return;
+        }
+        const std::string ssid = wifiSsidIt->second->AsString();
+        if (!copyBoundedString(ssid, config.network.wifi_ssid, sizeof(config.network.wifi_ssid))) {
+            writeJsonStatus(res, 400, "error", "field_wifiSsid_too_long");
+            return;
+        }
+        wifiChanged = true;
+    }
+
+    auto wifiPskIt = json.find("wifiPsk");
+    if (wifiPskIt != json.end()) {
+        hasAnyField = true;
+        if (!wifiPskIt->second->IsString()) {
+            writeJsonStatus(res, 400, "error", "field_wifiPsk_invalid");
+            return;
+        }
+        const std::string psk = wifiPskIt->second->AsString();
+        if (!copyBoundedString(psk, config.network.wifi_psk, sizeof(config.network.wifi_psk))) {
+            writeJsonStatus(res, 400, "error", "field_wifiPsk_too_long");
+            return;
+        }
+        wifiChanged = true;
+    }
+
+    if (!hasAnyField) {
+        writeJsonStatus(res, 400, "error", "no_supported_fields");
+        return;
+    }
+
+    bool rebootRequested = wifiChanged;
+    auto rebootIt = json.find("reboot");
+    if (rebootIt != json.end()) {
+        bool parsedReboot = false;
+        if (!parseBoolValue(rebootIt->second, parsedReboot)) {
+            writeJsonStatus(res, 400, "error", "field_reboot_invalid");
+            return;
+        }
+        rebootRequested = parsedReboot;
+    }
+
+    if (ownerChanged) {
+        snprintf(owner.id, sizeof(owner.id), "!%08x", nodeDB->getNodeNum());
+        service->reloadOwner(true);
+        nodeDB->saveToDisk(SEGMENT_DEVICESTATE | SEGMENT_NODEDATABASE);
+    }
+
+    if (wifiChanged) {
+        config.has_network = true;
+        nodeDB->saveToDisk(SEGMENT_CONFIG);
+#if HAS_WIFI
+        if (wifiReconnect) {
+            wifiReconnect->setIntervalFromNow(0);
+        }
+#endif
+    }
+
+    maybeScheduleReboot(rebootRequested);
+
+    JSONObject applied;
+    applied["owner_changed"] = new JSONValue(ownerChanged);
+    applied["wifi_changed"] = new JSONValue(wifiChanged);
+    applied["reboot_scheduled"] = new JSONValue(rebootRequested);
+
+    JSONObject root;
+    root["status"] = new JSONValue("ok");
+    root["data"] = new JSONValue(applied);
+    JSONValue response(root);
+    std::string jsonOut = response.Stringify();
+    res->print(jsonOut.c_str());
+}
+
+void handleJsonChatMessages(HTTPRequest *req, HTTPResponse *res)
+{
+    if (webServerThread)
+        webServerThread->markActivity();
+
+    setJsonCorsHeaders(res, "GET, OPTIONS");
+
+    if (req->getMethod() == "OPTIONS") {
+        res->setStatusCode(204);
+        res->print("");
+        return;
+    }
+
+#if !HAS_SCREEN
+    writeJsonStatus(res, 501, "error", "message_store_not_available");
+    return;
+#else
+    ResourceParameters *params = req->getParams();
+    std::string value;
+    size_t limit = DEFAULT_CHAT_LIMIT;
+    bool includeBroadcast = true;
+    bool includeDm = true;
+    bool hasSince = false;
+    uint32_t since = 0;
+    bool hasPeer = false;
+    uint32_t peerFilter = 0;
+    bool hasChannel = false;
+    uint8_t channelFilter = 0;
+
+    if (params->getQueryParameter("limit", value)) {
+        uint32_t parsedLimit = 0;
+        if (!parseUint32String(value, parsedLimit) || parsedLimit == 0) {
+            writeJsonStatus(res, 400, "error", "query_limit_invalid");
+            return;
+        }
+        if (parsedLimit > MAX_CHAT_LIMIT) {
+            parsedLimit = MAX_CHAT_LIMIT;
+        }
+        limit = parsedLimit;
+    }
+
+    if (params->getQueryParameter("includeBroadcast", value)) {
+        if (!parseBoolString(value, includeBroadcast)) {
+            writeJsonStatus(res, 400, "error", "query_includeBroadcast_invalid");
+            return;
+        }
+    }
+
+    if (params->getQueryParameter("includeDm", value)) {
+        if (!parseBoolString(value, includeDm)) {
+            writeJsonStatus(res, 400, "error", "query_includeDm_invalid");
+            return;
+        }
+    }
+
+    if (params->getQueryParameter("since", value)) {
+        if (!parseUint32String(value, since)) {
+            writeJsonStatus(res, 400, "error", "query_since_invalid");
+            return;
+        }
+        hasSince = true;
+    }
+
+    if (params->getQueryParameter("peer", value)) {
+        if (!parseUint32String(value, peerFilter, true) || peerFilter == 0) {
+            writeJsonStatus(res, 400, "error", "query_peer_invalid");
+            return;
+        }
+        hasPeer = true;
+    }
+
+    if (params->getQueryParameter("channel", value)) {
+        uint32_t parsedChannel = 0;
+        if (!parseUint32String(value, parsedChannel) || parsedChannel >= channels.getNumChannels()) {
+            writeJsonStatus(res, 400, "error", "query_channel_invalid");
+            return;
+        }
+        channelFilter = static_cast<uint8_t>(parsedChannel);
+        hasChannel = true;
+    }
+
+    const uint32_t localNodeNum = nodeDB->getNodeNum();
+    const std::deque<StoredMessage> &messages = messageStore.getMessages();
+    std::vector<const StoredMessage *> selected;
+    selected.reserve(limit);
+
+    for (auto it = messages.rbegin(); it != messages.rend() && selected.size() < limit; ++it) {
+        const StoredMessage &m = *it;
+        const bool isBroadcast = (m.dest == 0 || m.dest == NODENUM_BROADCAST);
+
+        if (hasSince && m.timestamp <= since) {
+            continue;
+        }
+        if (isBroadcast && !includeBroadcast) {
+            continue;
+        }
+        if (!isBroadcast && !includeDm) {
+            continue;
+        }
+        if (hasChannel && m.channelIndex != channelFilter) {
+            continue;
+        }
+        if (hasPeer) {
+            if (isBroadcast) {
+                continue;
+            }
+            const uint32_t peer = (m.sender == localNodeNum) ? m.dest : m.sender;
+            if (peer != peerFilter) {
+                continue;
+            }
+        }
+        selected.push_back(&m);
+    }
+
+    JSONArray messageArray;
+    for (auto it = selected.rbegin(); it != selected.rend(); ++it) {
+        const StoredMessage &m = **it;
+        const bool isBroadcast = (m.dest == 0 || m.dest == NODENUM_BROADCAST);
+        const bool outgoing = (m.sender == localNodeNum);
+        const uint32_t peer = isBroadcast ? NODENUM_BROADCAST : (outgoing ? m.dest : m.sender);
+
+        char senderId[16];
+        char toId[16];
+        char peerId[16];
+        snprintf(senderId, sizeof(senderId), "!%08x", m.sender);
+        snprintf(toId, sizeof(toId), "!%08x", m.dest);
+        snprintf(peerId, sizeof(peerId), "!%08x", peer);
+
+        JSONObject item;
+        item["timestamp"] = new JSONValue((double)m.timestamp);
+        item["is_boot_relative"] = new JSONValue(m.isBootRelative);
+        item["channel"] = new JSONValue((int)m.channelIndex);
+        item["scope"] = new JSONValue(isBroadcast ? "channel" : "private");
+        item["direction"] = new JSONValue(outgoing ? "out" : "in");
+        item["sender_num"] = new JSONValue((double)m.sender);
+        item["sender_id"] = new JSONValue(senderId);
+        item["to_num"] = new JSONValue((double)m.dest);
+        item["to_id"] = new JSONValue(toId);
+        item["peer_num"] = new JSONValue((double)peer);
+        item["peer_id"] = new JSONValue(peerId);
+        item["text"] = new JSONValue(MessageStore::getText(m));
+        messageArray.push_back(new JSONValue(item));
+    }
+
+    JSONObject data;
+    data["count"] = new JSONValue((int)messageArray.size());
+    data["messages"] = new JSONValue(messageArray);
+
+    JSONObject root;
+    root["status"] = new JSONValue("ok");
+    root["data"] = new JSONValue(data);
+    JSONValue response(root);
+    std::string jsonString = response.Stringify();
+    res->print(jsonString.c_str());
+#endif
 }
 
 void htmlDeleteDir(const char *dirname)
@@ -344,11 +1008,6 @@ void handleFsBrowseStatic(HTTPRequest *req, HTTPResponse *res)
     res->print(jsonString.c_str());
 
     delete value;
-
-    // Clean up the fileList to prevent memory leak
-    for (auto *val : fileList) {
-        delete val;
-    }
 }
 
 void handleFsDeleteStatic(HTTPRequest *req, HTTPResponse *res)
@@ -783,11 +1442,6 @@ void handleNodes(HTTPRequest *req, HTTPResponse *res)
     std::string jsonString = value->Stringify();
     res->print(jsonString.c_str());
     delete value;
-
-    // Clean up the nodesArray to prevent memory leak
-    for (auto *val : nodesArray) {
-        delete val;
-    }
 }
 
 /*
@@ -941,10 +1595,5 @@ void handleScanNetworks(HTTPRequest *req, HTTPResponse *res)
     std::string jsonString = value->Stringify();
     res->print(jsonString.c_str());
     delete value;
-
-    // Clean up the networkObjs to prevent memory leak
-    for (auto *val : networkObjs) {
-        delete val;
-    }
 }
 #endif

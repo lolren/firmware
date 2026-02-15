@@ -1,0 +1,1232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LongFast JSON Bridge</title>
+  <style>
+    :root {
+      --bg-1: #f6f1e8;
+      --bg-2: #d9ece5;
+      --panel: #ffffffcc;
+      --ink: #182128;
+      --muted: #60717c;
+      --accent: #0b8f7a;
+      --accent-strong: #086f5f;
+      --warn: #b1422a;
+      --line: #c2d4cf;
+      --msg-in: #eef4ff;
+      --msg-out: #e8fff6;
+      --msg-private: #fff3e8;
+      --shadow: 0 10px 30px #1f322a1f;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Trebuchet MS", "Lucida Sans Unicode", "Lucida Grande", sans-serif;
+      color: var(--ink);
+      background: radial-gradient(circle at 20% 0%, var(--bg-2), var(--bg-1));
+      padding: 18px;
+    }
+
+    .shell {
+      max-width: 1100px;
+      margin: 0 auto;
+      display: grid;
+      gap: 14px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 12px;
+      animation: rise 0.28s ease;
+    }
+
+    @keyframes rise {
+      from { transform: translateY(6px); opacity: 0.85; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    .header {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .title {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #9b9b9b;
+    }
+
+    .dot.ok { background: #1d9f54; }
+    .dot.err { background: #cf3b2e; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.25fr 1fr;
+      gap: 14px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .row.single {
+      grid-template-columns: 1fr;
+    }
+
+    label {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+      display: block;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+      text-transform: uppercase;
+    }
+
+    input, select, button, textarea {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid #aac0ba;
+      padding: 8px 9px;
+      font-size: 14px;
+      color: var(--ink);
+      background: #fff;
+      font-family: "Consolas", "Liberation Mono", monospace;
+    }
+
+    textarea {
+      min-height: 70px;
+      resize: vertical;
+      line-height: 1.35;
+    }
+
+    button {
+      cursor: pointer;
+      font-weight: 700;
+      border: 1px solid var(--accent-strong);
+      background: linear-gradient(160deg, var(--accent), var(--accent-strong));
+      color: #fff;
+      transition: transform 0.12s ease, filter 0.12s ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.05);
+    }
+
+    button.secondary {
+      border-color: #7a8f89;
+      background: linear-gradient(160deg, #889f98, #6f8881);
+    }
+
+    .checks {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .checks label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin: 0;
+      text-transform: none;
+      font-weight: 600;
+      font-size: 13px;
+      color: #40525c;
+    }
+
+    .checks input[type="checkbox"] {
+      width: auto;
+      margin: 0;
+    }
+
+    .meta {
+      font-size: 12px;
+      color: var(--muted);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .banner {
+      font-size: 13px;
+      font-family: "Consolas", "Liberation Mono", monospace;
+      padding: 8px 9px;
+      border-radius: 9px;
+      border: 1px solid #bfcfca;
+      background: #f6faf9;
+      color: #334954;
+      min-height: 35px;
+    }
+
+    .banner.err {
+      border-color: #e0b2a9;
+      background: #fff2ef;
+      color: var(--warn);
+    }
+
+    .messages {
+      display: grid;
+      gap: 8px;
+      max-height: 58vh;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .nodes {
+      display: grid;
+      gap: 7px;
+      max-height: 32vh;
+      overflow: auto;
+      padding-right: 4px;
+      margin-top: 8px;
+    }
+
+    .node-item {
+      width: 100%;
+      text-align: left;
+      border: 1px solid #bfd1cb;
+      border-radius: 10px;
+      padding: 7px 9px;
+      background: #f8fffc;
+      color: #1d2c34;
+      cursor: pointer;
+      font-family: "Consolas", "Liberation Mono", monospace;
+      display: grid;
+      gap: 4px;
+    }
+
+    .node-item:hover {
+      border-color: #92b7ab;
+      background: #f0fbf7;
+    }
+
+    .node-title {
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .node-meta {
+      font-size: 12px;
+      color: #576c77;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .context-menu {
+      position: fixed;
+      z-index: 1200;
+      min-width: 230px;
+      max-width: 300px;
+      border: 1px solid #9ab7af;
+      border-radius: 12px;
+      background: #f8fdfb;
+      box-shadow: 0 16px 30px #1a2f2a30;
+      padding: 6px;
+      display: none;
+      animation: rise 0.12s ease;
+    }
+
+    .context-menu.show {
+      display: block;
+    }
+
+    .context-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: #38515d;
+      margin: 2px 6px 6px;
+      word-break: break-word;
+      font-family: "Consolas", "Liberation Mono", monospace;
+    }
+
+    .context-action {
+      width: 100%;
+      text-align: left;
+      border: 1px solid #bfd1cb;
+      border-radius: 8px;
+      background: #fff;
+      color: #20313a;
+      margin: 0 0 5px;
+      padding: 7px 9px;
+      font-size: 13px;
+      font-family: "Consolas", "Liberation Mono", monospace;
+      cursor: pointer;
+    }
+
+    .context-action:last-child {
+      margin-bottom: 0;
+    }
+
+    .context-action:hover {
+      border-color: #87b4a6;
+      background: #f2f9f6;
+    }
+
+    .msg {
+      border-radius: 10px;
+      border: 1px solid #c8d8d3;
+      padding: 8px 10px;
+      background: #fff;
+      display: grid;
+      gap: 6px;
+    }
+
+    .msg.in {
+      background: var(--msg-in);
+    }
+
+    .msg.out {
+      background: var(--msg-out);
+      border-color: #b1d8ca;
+    }
+
+    .msg.private {
+      border-left: 5px solid #dc8e52;
+      background: var(--msg-private);
+    }
+
+    .msg .line {
+      font-family: "Consolas", "Liberation Mono", monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 14px;
+      line-height: 1.35;
+    }
+
+    .msg .head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      font-size: 12px;
+      color: #4c5f6b;
+    }
+
+    @media (max-width: 920px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      body {
+        padding: 10px;
+      }
+
+      .messages {
+        max-height: 52vh;
+      }
+
+      .nodes {
+        max-height: 26vh;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="panel header">
+      <div class="title">LongFast JSON Bridge</div>
+      <div class="status">
+        <span id="statusDot" class="dot"></span>
+        <span id="statusText">starting...</span>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="panel">
+        <label for="espBaseUrl">ESP Base URL</label>
+        <div class="row">
+          <input id="espBaseUrl" type="text" placeholder="http://192.168.1.100">
+          <button id="saveConfigBtn" type="button">Save Target</button>
+        </div>
+
+        <div class="meta" id="reportMeta">node report: waiting...</div>
+
+        <label style="margin-top: 10px;">Node Config (Name + WiFi)</label>
+        <div class="row">
+          <div>
+            <label for="cfgLongName">Long Name</label>
+            <input id="cfgLongName" type="text" maxlength="39" placeholder="Meshtastic Node">
+          </div>
+          <div>
+            <label for="cfgShortName">Short Name</label>
+            <input id="cfgShortName" type="text" maxlength="4" placeholder="ABCD">
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="cfgWifiSsid">WiFi SSID</label>
+            <input id="cfgWifiSsid" type="text" maxlength="32" placeholder="YourWiFiSSID">
+          </div>
+          <div>
+            <label for="cfgWifiPsk">WiFi PSK</label>
+            <input id="cfgWifiPsk" type="password" maxlength="64" placeholder="leave empty unless updating">
+          </div>
+        </div>
+
+        <div class="checks">
+          <label><input id="cfgWifiEnabled" type="checkbox"> wifiEnabled</label>
+          <label><input id="cfgSetPsk" type="checkbox"> update wifiPsk</label>
+          <label><input id="cfgReboot" type="checkbox" checked> reboot after save</label>
+        </div>
+
+        <div class="row" style="margin-top: 10px;">
+          <button id="loadNodeConfigBtn" class="secondary" type="button">Load Node Config</button>
+          <button id="saveNodeConfigBtn" class="secondary" type="button">Save Node Config</button>
+        </div>
+        <div id="nodeConfigMeta" class="meta">config: not loaded</div>
+
+        <div class="row single">
+          <label for="messageText">Message</label>
+          <textarea id="messageText" placeholder="Type text and click Send"></textarea>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="sendChannel">Channel Index (Broadcast)</label>
+            <input id="sendChannel" type="number" min="0" value="0">
+          </div>
+          <div>
+            <label for="privateTo">Private To (`!hex` or decimal)</label>
+            <input id="privateTo" type="text" placeholder="!1234abcd">
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="hopLimit">Hop Limit (optional)</label>
+            <input id="hopLimit" type="number" min="0" max="255" placeholder="optional">
+          </div>
+          <div>
+            <label for="quickHelp">Send Help</label>
+            <input id="quickHelp" type="text" value="Right-click a node for DM actions; Send Private is never broadcast" readonly>
+          </div>
+        </div>
+
+        <div class="checks">
+          <label><input id="wantAck" type="checkbox" checked> wantAck</label>
+        </div>
+
+        <div class="row" style="margin-top: 12px;">
+          <button id="sendChannelBtn" type="button">Send Channel</button>
+          <button id="sendPrivateBtn" type="button">Send Private</button>
+        </div>
+
+        <div class="row" style="margin-top: 10px;">
+          <button id="fullRefreshBtn" class="secondary" type="button">Full Refresh</button>
+          <div></div>
+        </div>
+      </article>
+
+      <article class="panel">
+        <div class="row">
+          <div>
+            <label for="pollMs">Poll Every (ms)</label>
+            <input id="pollMs" type="number" min="500" step="100" value="1500">
+          </div>
+          <div>
+            <label for="limit">Fetch Limit</label>
+            <input id="limit" type="number" min="1" max="100" value="60">
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="peerFilter">Peer Filter (DM thread)</label>
+            <input id="peerFilter" type="text" placeholder="!1234abcd or 305441741">
+          </div>
+          <div>
+            <label for="channelFilter">Channel Filter</label>
+            <input id="channelFilter" type="number" min="0" placeholder="optional">
+          </div>
+        </div>
+
+        <div class="checks">
+          <label><input id="includeBroadcast" type="checkbox" checked> includeBroadcast</label>
+          <label><input id="includeDm" type="checkbox" checked> includeDm</label>
+          <label><input id="autoScroll" type="checkbox" checked> autoScroll</label>
+        </div>
+
+        <div class="row" style="margin-top: 12px;">
+          <button id="applyPollBtn" type="button">Apply Polling</button>
+          <button id="clearBtn" class="secondary" type="button">Clear View</button>
+        </div>
+
+        <div class="row" style="margin-top: 10px;">
+          <button id="refreshNodesBtn" class="secondary" type="button">Refresh Nodes</button>
+          <div></div>
+        </div>
+
+        <div id="banner" class="banner" style="margin-top: 12px;">ready</div>
+        <div id="messageCount" class="meta">messages: 0</div>
+        <label style="margin-top: 10px;">Known Nodes (click for DM target)</label>
+        <div id="nodeCount" class="meta">nodes: 0</div>
+        <div id="nodeList" class="nodes"></div>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div id="messages" class="messages" aria-live="polite"></div>
+    </section>
+  </main>
+  <div id="nodeContextMenu" class="context-menu"></div>
+
+  <script>
+    const state = {
+      lastTimestamp: 0,
+      seen: new Set(),
+      pollTimer: null,
+      inFlight: false,
+      nodeNames: new Map(),
+      contextNodeId: ""
+    };
+
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("statusText");
+    const reportMeta = document.getElementById("reportMeta");
+    const banner = document.getElementById("banner");
+    const messagesEl = document.getElementById("messages");
+    const messageCount = document.getElementById("messageCount");
+    const nodeCountEl = document.getElementById("nodeCount");
+    const nodeListEl = document.getElementById("nodeList");
+    const nodeContextMenu = document.getElementById("nodeContextMenu");
+    const messageTextInput = document.getElementById("messageText");
+    const privateToInput = document.getElementById("privateTo");
+    const peerFilterInput = document.getElementById("peerFilter");
+    const includeBroadcastInput = document.getElementById("includeBroadcast");
+    const includeDmInput = document.getElementById("includeDm");
+    const nodeConfigMeta = document.getElementById("nodeConfigMeta");
+    const cfgLongNameInput = document.getElementById("cfgLongName");
+    const cfgShortNameInput = document.getElementById("cfgShortName");
+    const cfgWifiEnabledInput = document.getElementById("cfgWifiEnabled");
+    const cfgWifiSsidInput = document.getElementById("cfgWifiSsid");
+    const cfgWifiPskInput = document.getElementById("cfgWifiPsk");
+    const cfgSetPskInput = document.getElementById("cfgSetPsk");
+    const cfgRebootInput = document.getElementById("cfgReboot");
+
+    function setStatus(ok, text) {
+      statusDot.className = ok ? "dot ok" : "dot err";
+      statusText.textContent = text;
+    }
+
+    function setBanner(text, isError = false) {
+      banner.textContent = text;
+      banner.className = isError ? "banner err" : "banner";
+    }
+
+    function hideNodeContextMenu() {
+      nodeContextMenu.classList.remove("show");
+      nodeContextMenu.innerHTML = "";
+      state.contextNodeId = "";
+    }
+
+    function positionNodeContextMenu(x, y) {
+      nodeContextMenu.style.left = `${x}px`;
+      nodeContextMenu.style.top = `${y}px`;
+
+      const rect = nodeContextMenu.getBoundingClientRect();
+      const pad = 8;
+      if (rect.right > window.innerWidth - pad) {
+        nodeContextMenu.style.left = `${Math.max(pad, window.innerWidth - rect.width - pad)}px`;
+      }
+      if (rect.bottom > window.innerHeight - pad) {
+        nodeContextMenu.style.top = `${Math.max(pad, window.innerHeight - rect.height - pad)}px`;
+      }
+    }
+
+    async function copyText(text, label) {
+      if (!text) {
+        setBanner(`cannot copy empty ${label}`, true);
+        return;
+      }
+
+      let copied = false;
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+          copied = true;
+        }
+      } catch (_) {
+        copied = false;
+      }
+
+      if (!copied) {
+        const area = document.createElement("textarea");
+        area.value = text;
+        area.style.position = "fixed";
+        area.style.left = "-9999px";
+        document.body.appendChild(area);
+        area.focus();
+        area.select();
+        try {
+          copied = document.execCommand("copy");
+        } catch (_) {
+          copied = false;
+        }
+        area.remove();
+      }
+
+      if (copied) {
+        setBanner(`${label} copied: ${text}`);
+      } else {
+        setBanner(`clipboard blocked, ${label}: ${text}`, true);
+      }
+    }
+
+    async function focusDmThread(nodeId) {
+      peerFilterInput.value = nodeId;
+      includeBroadcastInput.checked = false;
+      includeDmInput.checked = true;
+      await refreshMessages(false);
+      setBanner(`DM thread focused for ${nodeId}`);
+    }
+
+    function showNodeContextMenu(node, x, y) {
+      hideNodeContextMenu();
+      state.contextNodeId = node.id;
+
+      const title = document.createElement("div");
+      title.className = "context-title";
+      title.textContent = `${node.display} (${node.id})`;
+      nodeContextMenu.appendChild(title);
+
+      const actions = [
+        {
+          label: "Set As Private Target",
+          run: async () => {
+            privateToInput.value = node.id;
+            setBanner(`private target set to ${node.id}`);
+          }
+        },
+        {
+          label: "Set Peer Filter",
+          run: async () => {
+            peerFilterInput.value = node.id;
+            setBanner(`peer filter set to ${node.id}`);
+          }
+        },
+        {
+          label: "Set DM Target + Filter",
+          run: async () => {
+            privateToInput.value = node.id;
+            peerFilterInput.value = node.id;
+            includeBroadcastInput.checked = false;
+            includeDmInput.checked = true;
+            await refreshMessages(false);
+            setBanner(`DM target and filter set for ${node.id}`);
+          }
+        },
+        {
+          label: "Send Private Using Current Text",
+          run: async () => {
+            privateToInput.value = node.id;
+            if (!messageTextInput.value.trim()) {
+              const quick = window.prompt(`Private message for ${node.display}:`, "");
+              if (!quick || !quick.trim()) {
+                setBanner("private send cancelled", true);
+                return;
+              }
+              messageTextInput.value = quick.trim();
+            }
+            await sendPrivateMessage();
+          }
+        },
+        {
+          label: "Open DM Thread View",
+          run: async () => {
+            await focusDmThread(node.id);
+          }
+        },
+        {
+          label: "Copy Node ID",
+          run: async () => {
+            await copyText(node.id, "node id");
+          }
+        }
+      ];
+
+      for (const action of actions) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "context-action";
+        button.textContent = action.label;
+        button.addEventListener("click", async (event) => {
+          event.preventDefault();
+          hideNodeContextMenu();
+          await action.run();
+        });
+        nodeContextMenu.appendChild(button);
+      }
+
+      nodeContextMenu.classList.add("show");
+      positionNodeContextMenu(x, y);
+    }
+
+    async function fetchJson(url, options = {}) {
+      const opts = { ...options };
+      if (!opts.headers) {
+        opts.headers = {};
+      }
+      if (opts.body && !opts.headers["Content-Type"]) {
+        opts.headers["Content-Type"] = "application/json";
+      }
+
+      const res = await fetch(url, opts);
+      const raw = await res.text();
+      let body = {};
+      try {
+        body = raw ? JSON.parse(raw) : {};
+      } catch (_) {
+        body = { status: "error", error: "invalid_json_response", detail: raw.slice(0, 300) };
+      }
+      return { res, body };
+    }
+
+    function formatTimestamp(ts, isBootRelative) {
+      const value = Number(ts);
+      if (!Number.isFinite(value) || value <= 0) {
+        return "ts:?";
+      }
+      if (isBootRelative) {
+        return `+${value}s`;
+      }
+      const date = new Date(value * 1000);
+      return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+    }
+
+    function messageKey(msg) {
+      return [msg.timestamp, msg.sender_num, msg.to_num, msg.channel, msg.text].join("|");
+    }
+
+    function normalizeNodeId(id, num) {
+      if (typeof id === "string" && id.trim()) {
+        return id.trim().toLowerCase();
+      }
+      const n = Number(num);
+      if (!Number.isFinite(n) || n < 0) {
+        return "";
+      }
+      return `!${n.toString(16).padStart(8, "0").toLowerCase()}`;
+    }
+
+    function formatNodeRef(prefix, id, num) {
+      const nodeId = normalizeNodeId(id, num);
+      if (!nodeId) {
+        return `${prefix}:?`;
+      }
+
+      if (nodeId === "!ffffffff" || Number(num) === 4294967295) {
+        return `${prefix}:broadcast`;
+      }
+
+      const display = state.nodeNames.get(nodeId);
+      if (display) {
+        return `${prefix}:${display} (${nodeId})`;
+      }
+
+      return `${prefix}:${nodeId}`;
+    }
+
+    function formatDisplayName(shortName, longName, nodeId) {
+      const shortText = typeof shortName === "string" ? shortName.trim() : "";
+      const longText = typeof longName === "string" ? longName.trim() : "";
+      if (shortText && longText && shortText !== longText) {
+        return `${shortText}/${longText}`;
+      }
+      return shortText || longText || nodeId;
+    }
+
+    function formatLastHeard(lastHeard) {
+      const value = Number(lastHeard);
+      if (!Number.isFinite(value) || value <= 0) {
+        return "last:?";
+      }
+      const dt = new Date(value * 1000);
+      if (Number.isNaN(dt.getTime())) {
+        return `last:${value}`;
+      }
+      return `last:${dt.toLocaleTimeString()}`;
+    }
+
+    function selectNodeForDm(nodeId) {
+      privateToInput.value = nodeId;
+      peerFilterInput.value = nodeId;
+      setBanner(`selected ${nodeId} for private chat, now click Send Private`);
+    }
+
+    function renderNodeList(nodes) {
+      nodeListEl.innerHTML = "";
+      nodeCountEl.textContent = `nodes: ${nodes.length}`;
+      if (nodes.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "meta";
+        empty.textContent = "No nodes found yet";
+        nodeListEl.appendChild(empty);
+        return;
+      }
+
+      for (const node of nodes) {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "node-item";
+        item.title = "Click to use as DM target";
+
+        const title = document.createElement("div");
+        title.className = "node-title";
+        title.textContent = `${node.display} (${node.id})`;
+
+        const meta = document.createElement("div");
+        meta.className = "node-meta";
+        const snrText = Number.isFinite(Number(node.snr)) ? `snr:${Number(node.snr).toFixed(1)}` : "snr:?";
+        meta.textContent = `${snrText} | ${formatLastHeard(node.lastHeard)}`;
+
+        item.appendChild(title);
+        item.appendChild(meta);
+        item.addEventListener("click", () => selectNodeForDm(node.id));
+        item.addEventListener("contextmenu", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          showNodeContextMenu(node, event.clientX, event.clientY);
+        });
+        nodeListEl.appendChild(item);
+      }
+    }
+
+    async function refreshNodeMap() {
+      try {
+        const { res, body } = await fetchJson("/api/nodes?content=json", { cache: "no-store" });
+        if (!res.ok || body.status !== "ok") {
+          return false;
+        }
+
+        const nodes = body.data && Array.isArray(body.data.nodes) ? body.data.nodes : [];
+        const nextMap = new Map();
+        const nodeList = [];
+        for (const node of nodes) {
+          const nodeId = normalizeNodeId(node.id, null);
+          if (!nodeId) {
+            continue;
+          }
+
+          const display = formatDisplayName(node.short_name, node.long_name, nodeId);
+          nextMap.set(nodeId, display);
+          nodeList.push({
+            id: nodeId,
+            display,
+            snr: node.snr,
+            lastHeard: node.last_heard || 0
+          });
+        }
+        nodeList.sort((a, b) => a.display.localeCompare(b.display));
+        state.nodeNames = nextMap;
+        renderNodeList(nodeList);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function appendMessages(messages) {
+      for (const msg of messages) {
+        const key = messageKey(msg);
+        if (state.seen.has(key)) {
+          continue;
+        }
+        state.seen.add(key);
+
+        const row = document.createElement("article");
+        row.classList.add("msg");
+        row.classList.add(msg.direction === "out" ? "out" : "in");
+        if (msg.scope === "private") {
+          row.classList.add("private");
+        }
+
+        const head = document.createElement("div");
+        head.className = "head";
+        const parts = [
+          formatTimestamp(msg.timestamp, msg.is_boot_relative),
+          msg.scope || "?",
+          msg.direction || "?",
+          `ch:${msg.channel}`,
+          formatNodeRef("from", msg.sender_id, msg.sender_num),
+          formatNodeRef("to", msg.to_id, msg.to_num),
+          formatNodeRef("peer", msg.peer_id, msg.peer_num)
+        ];
+        head.textContent = parts.join(" | ");
+
+        const line = document.createElement("div");
+        line.className = "line";
+        line.textContent = String(msg.text || "");
+
+        row.appendChild(head);
+        row.appendChild(line);
+        messagesEl.appendChild(row);
+
+        const ts = Number(msg.timestamp);
+        if (Number.isFinite(ts) && ts > state.lastTimestamp) {
+          state.lastTimestamp = ts;
+        }
+      }
+
+      while (messagesEl.children.length > 500) {
+        messagesEl.removeChild(messagesEl.firstChild);
+      }
+
+      messageCount.textContent = `messages: ${messagesEl.children.length} | lastTimestamp: ${state.lastTimestamp}`;
+
+      if (document.getElementById("autoScroll").checked) {
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+    }
+
+    function buildMessageQuery(incremental = true) {
+      const params = new URLSearchParams();
+      const limit = Number(document.getElementById("limit").value || 60);
+      params.set("limit", String(Math.min(100, Math.max(1, limit))));
+      params.set("includeBroadcast", String(document.getElementById("includeBroadcast").checked));
+      params.set("includeDm", String(document.getElementById("includeDm").checked));
+
+      const peer = document.getElementById("peerFilter").value.trim();
+      const channel = document.getElementById("channelFilter").value.trim();
+      if (peer) {
+        params.set("peer", peer);
+      }
+      if (channel !== "") {
+        params.set("channel", channel);
+      }
+      if (incremental && state.lastTimestamp > 0) {
+        params.set("since", String(state.lastTimestamp));
+      }
+      return params;
+    }
+
+    async function refreshMessages(incremental = true) {
+      if (state.inFlight) {
+        return;
+      }
+      state.inFlight = true;
+      try {
+        const q = buildMessageQuery(incremental).toString();
+        const { res, body } = await fetchJson(`/api/messages?${q}`, { cache: "no-store" });
+        if (!res.ok || body.status !== "ok") {
+          setStatus(false, "messages error");
+          setBanner(`messages failed (${res.status}): ${body.error || "unknown"}`, true);
+          return;
+        }
+
+        const messages = (body.data && Array.isArray(body.data.messages)) ? body.data.messages : [];
+        appendMessages(messages);
+        setStatus(true, "connected");
+        setBanner(`poll ok | fetched ${messages.length} message(s)`);
+      } catch (err) {
+        setStatus(false, "poll failed");
+        setBanner(`poll error: ${err}`, true);
+      } finally {
+        state.inFlight = false;
+      }
+    }
+
+    async function refreshReport() {
+      try {
+        const { res, body } = await fetchJson("/api/report", { cache: "no-store" });
+        if (!res.ok || body.status !== "ok") {
+          reportMeta.textContent = `node report unavailable (${res.status})`;
+          return;
+        }
+
+        const wifi = body.data && body.data.wifi ? body.data.wifi : {};
+        const dev = body.data && body.data.device ? body.data.device : {};
+        reportMeta.textContent = `node ip: ${wifi.ip || "?"} | rssi: ${wifi.rssi ?? "?"} | reboots: ${dev.reboot_counter ?? "?"}`;
+      } catch (err) {
+        reportMeta.textContent = `node report error: ${err}`;
+      }
+    }
+
+    async function loadConfig() {
+      const { res, body } = await fetchJson("/api/config", { cache: "no-store" });
+      if (!res.ok || body.status !== "ok") {
+        setStatus(false, "config failed");
+        setBanner("cannot read backend config", true);
+        return;
+      }
+      document.getElementById("espBaseUrl").value = body.esp_base_url || "";
+    }
+
+    function applyNodeConfigForm(body) {
+      const data = body && body.data ? body.data : {};
+      const owner = data.owner || {};
+      const wifi = data.wifi || {};
+      cfgLongNameInput.value = owner.long_name || "";
+      cfgShortNameInput.value = owner.short_name || "";
+      cfgWifiEnabledInput.checked = !!wifi.enabled;
+      cfgWifiSsidInput.value = wifi.ssid || "";
+      cfgSetPskInput.checked = false;
+      cfgWifiPskInput.value = "";
+
+      const nodeLabel = owner.id || "?";
+      const shortLabel = owner.short_name || owner.long_name || "?";
+      const wifiLabel = wifi.enabled ? "on" : "off";
+      nodeConfigMeta.textContent = `config: ${nodeLabel} | name: ${shortLabel} | wifi: ${wifiLabel} ssid:${wifi.ssid || ""}`;
+    }
+
+    async function loadNodeConfig() {
+      const { res, body } = await fetchJson("/api/node-config", { cache: "no-store" });
+      if (!res.ok || body.status !== "ok") {
+        setBanner(`load node config failed (${res.status}): ${body.error || "unknown"}`, true);
+        return;
+      }
+      applyNodeConfigForm(body);
+      setBanner("node config loaded");
+    }
+
+    async function saveNodeConfig() {
+      const longName = cfgLongNameInput.value.trim();
+      const shortName = cfgShortNameInput.value.trim();
+      const wifiSsid = cfgWifiSsidInput.value;
+
+      if (longName.length > 39) {
+        setBanner("long name too long (max 39)", true);
+        return;
+      }
+      if (shortName.length > 4) {
+        setBanner("short name too long (max 4)", true);
+        return;
+      }
+      if (wifiSsid.length > 32) {
+        setBanner("wifi ssid too long (max 32)", true);
+        return;
+      }
+
+      const payload = {
+        longName,
+        shortName,
+        wifiEnabled: cfgWifiEnabledInput.checked,
+        wifiSsid,
+        reboot: cfgRebootInput.checked
+      };
+
+      if (cfgSetPskInput.checked) {
+        const psk = cfgWifiPskInput.value;
+        if (psk.length > 64) {
+          setBanner("wifi psk too long (max 64)", true);
+          return;
+        }
+        payload.wifiPsk = psk;
+      }
+
+      const { res, body } = await fetchJson("/api/node-config", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok || body.status !== "ok") {
+        setBanner(`save node config failed (${res.status}): ${body.error || "unknown"}`, true);
+        return;
+      }
+
+      const changed = body.data || {};
+      const rebootNote = changed.reboot_scheduled ? " (reboot scheduled in ~5s)" : "";
+      setBanner(`node config saved${rebootNote}`);
+
+      if (!changed.reboot_scheduled) {
+        await loadNodeConfig();
+        await refreshNodeMap();
+        await refreshReport();
+      } else {
+        nodeConfigMeta.textContent = "config: saved, waiting for reboot/reconnect...";
+      }
+    }
+
+    async function saveConfig() {
+      const espBaseUrl = document.getElementById("espBaseUrl").value.trim();
+      const { res, body } = await fetchJson("/api/config", {
+        method: "POST",
+        body: JSON.stringify({ esp_base_url: espBaseUrl })
+      });
+
+      if (!res.ok || body.status !== "ok") {
+        setStatus(false, "config invalid");
+        setBanner(`save config failed (${res.status}): ${body.error || "unknown"}`, true);
+        return;
+      }
+
+      setBanner(`target updated: ${body.esp_base_url}`);
+      setStatus(true, "target updated");
+      clearMessages();
+      await loadNodeConfig();
+      await refreshNodeMap();
+      await refreshReport();
+      await refreshMessages(false);
+    }
+
+    function clearMessages() {
+      state.lastTimestamp = 0;
+      state.seen.clear();
+      messagesEl.innerHTML = "";
+      messageCount.textContent = "messages: 0";
+    }
+
+    function buildSendPayloadBase() {
+      const text = messageTextInput.value.trim();
+      if (!text) {
+        setBanner("message text is required", true);
+        return null;
+      }
+
+      const payload = { text };
+      const hopLimitRaw = document.getElementById("hopLimit").value.trim();
+      if (hopLimitRaw !== "") {
+        payload.hopLimit = Number(hopLimitRaw);
+      }
+
+      return payload;
+    }
+
+    async function postSend(payload, kindLabel) {
+      const targetText = payload.to ? String(payload.to) : `channel ${payload.channel}`;
+
+      const { res, body } = await fetchJson("/api/send", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok || body.status !== "ok") {
+        setStatus(false, "send failed");
+        setBanner(`send failed (${res.status}): ${body.error || "unknown"}`, true);
+        return;
+      }
+
+      setStatus(true, "sent");
+      setBanner(`${kindLabel} sent to ${targetText} | packet ${body.data ? body.data.packet_id : "?"}`);
+      messageTextInput.value = "";
+      await refreshMessages(true);
+      await refreshReport();
+    }
+
+    async function sendChannelMessage() {
+      const payload = buildSendPayloadBase();
+      if (!payload) {
+        return;
+      }
+      payload.channel = Number(document.getElementById("sendChannel").value || 0);
+      await postSend(payload, "channel");
+    }
+
+    async function sendPrivateMessage() {
+      const payload = buildSendPayloadBase();
+      if (!payload) {
+        return;
+      }
+
+      const to = privateToInput.value.trim();
+      if (!to) {
+        setBanner("private destination is required (Private To)", true);
+        return;
+      }
+      payload.to = to;
+      payload.wantAck = document.getElementById("wantAck").checked;
+      await postSend(payload, "private");
+    }
+
+    function applyPolling() {
+      const raw = Number(document.getElementById("pollMs").value || 1500);
+      const ms = Math.max(500, raw);
+      document.getElementById("pollMs").value = String(ms);
+
+      if (state.pollTimer) {
+        clearInterval(state.pollTimer);
+      }
+      state.pollTimer = setInterval(() => refreshMessages(true), ms);
+      setBanner(`polling every ${ms}ms`);
+    }
+
+    document.addEventListener("click", (event) => {
+      if (!nodeContextMenu.classList.contains("show")) {
+        return;
+      }
+      const target = event.target;
+      if (!(target instanceof Node) || !nodeContextMenu.contains(target)) {
+        hideNodeContextMenu();
+      }
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        hideNodeContextMenu();
+      }
+    });
+    document.addEventListener("scroll", () => hideNodeContextMenu(), true);
+    window.addEventListener("resize", hideNodeContextMenu);
+
+    document.getElementById("saveConfigBtn").addEventListener("click", saveConfig);
+    document.getElementById("loadNodeConfigBtn").addEventListener("click", loadNodeConfig);
+    document.getElementById("saveNodeConfigBtn").addEventListener("click", saveNodeConfig);
+    document.getElementById("sendChannelBtn").addEventListener("click", sendChannelMessage);
+    document.getElementById("sendPrivateBtn").addEventListener("click", sendPrivateMessage);
+    document.getElementById("applyPollBtn").addEventListener("click", applyPolling);
+    document.getElementById("refreshNodesBtn").addEventListener("click", async () => {
+      const ok = await refreshNodeMap();
+      setBanner(ok ? "nodes refreshed" : "node refresh failed", !ok);
+    });
+    document.getElementById("fullRefreshBtn").addEventListener("click", async () => {
+      clearMessages();
+      await refreshMessages(false);
+    });
+    document.getElementById("clearBtn").addEventListener("click", clearMessages);
+    messageTextInput.addEventListener("keydown", async (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        const hasPrivateTarget = privateToInput.value.trim() !== "";
+        if (hasPrivateTarget) {
+          await sendPrivateMessage();
+        } else {
+          await sendChannelMessage();
+        }
+      }
+    });
+
+    (async () => {
+      await loadConfig();
+      await loadNodeConfig();
+      await refreshNodeMap();
+      await refreshReport();
+      await refreshMessages(false);
+      applyPolling();
+      setInterval(refreshNodeMap, 30000);
+      setInterval(refreshReport, 6000);
+    })();
+  </script>
+</body>
+</html>
