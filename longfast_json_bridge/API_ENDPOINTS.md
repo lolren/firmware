@@ -80,6 +80,14 @@ curl -sS -X POST "http://<node-ip>/json/chat/send" \
 
 Read owner + Wi-Fi config.
 
+Wi-Fi block includes:
+
+- `enabled`
+- `ssid` / `ssid2` / `ssid3`
+- `psk_set` / `psk_set2` / `psk_set3`
+- `network_count`
+- `networks` array (`index`, `ssid`, `psk_set`)
+
 Example:
 
 ```bash
@@ -97,7 +105,16 @@ Request JSON fields:
 - `wifiEnabled` (bool)
 - `wifiSsid` (string, max 32)
 - `wifiPsk` (string, max 64)
+- `wifiSsid2` (string, max 32, optional fallback)
+- `wifiPsk2` (string, max 64)
+- `wifiSsid3` (string, max 32, optional fallback)
+- `wifiPsk3` (string, max 64)
 - `reboot` (bool)
+
+Notes:
+
+- Empty `wifiPsk*` means open network.
+- If `wifiPsk2`/`wifiPsk3` is provided, matching `wifiSsid2`/`wifiSsid3` must also be set.
 
 Example:
 
@@ -105,6 +122,14 @@ Example:
 curl -sS -X POST http://<node-ip>/json/config/node \
   -H "Content-Type: application/json" \
   -d '{"wifiEnabled":true,"wifiSsid":"YOUR_SSID","wifiPsk":"YOUR_PASSWORD","reboot":true}'
+```
+
+Multi-AP example:
+
+```bash
+curl -sS -X POST http://<node-ip>/json/config/node \
+  -H "Content-Type: application/json" \
+  -d '{"wifiEnabled":true,"wifiSsid":"PRIMARY_SSID","wifiPsk":"PRIMARY_PASSWORD","wifiSsid2":"FALLBACK_SSID","wifiPsk2":"FALLBACK_PASSWORD","reboot":true}'
 ```
 
 ## 2) Local PC Proxy Endpoints (`http://127.0.0.1:8765/api/*`)

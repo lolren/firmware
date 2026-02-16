@@ -35,6 +35,8 @@ cd <repo-root>
   --reboot
 ```
 
+For fallback SSIDs, use `/json/config/node` fields `wifiSsid2`/`wifiPsk2` (and optional `wifiSsid3`/`wifiPsk3`) after first network access.
+
 Get IP from serial logs:
 
 ```bash

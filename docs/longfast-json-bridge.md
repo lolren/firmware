@@ -28,6 +28,7 @@ Local UI bundle:
 - Node list with names and IDs
 - Right-click quick actions for DM workflows
 - Node name + Wi-Fi configuration from browser
+- Multi-SSID Wi-Fi fallback (`wifiSsid`, `wifiSsid2`, `wifiSsid3`)
 
 ## Security Notes
 

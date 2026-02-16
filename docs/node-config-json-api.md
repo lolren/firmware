@@ -28,7 +28,16 @@ Example response:
     "wifi": {
       "enabled": true,
       "ssid": "YourWiFiSSID",
-      "psk_set": true
+      "ssid2": "FallbackSSID",
+      "ssid3": "",
+      "psk_set": true,
+      "psk_set2": true,
+      "psk_set3": false,
+      "network_count": 2,
+      "networks": [
+        { "index": 1, "ssid": "YourWiFiSSID", "psk_set": true },
+        { "index": 2, "ssid": "FallbackSSID", "psk_set": true }
+      ]
     }
   }
 }
@@ -43,6 +52,10 @@ All fields are optional, but at least one must be present.
 - `wifiEnabled` (bool)
 - `wifiSsid` (string, max 32)
 - `wifiPsk` (string, max 64)
+- `wifiSsid2` (string, max 32, optional fallback)
+- `wifiPsk2` (string, max 64)
+- `wifiSsid3` (string, max 32, optional fallback)
+- `wifiPsk3` (string, max 64)
 - `reboot` (bool)
   - Default: `true` if Wi-Fi fields changed, otherwise `false`
 
@@ -62,6 +75,14 @@ Set Wi-Fi and reboot (recommended):
 curl -sS -X POST http://<node-ip>/json/config/node \
   -H "Content-Type: application/json" \
   -d '{"wifiEnabled":true,"wifiSsid":"YourWiFiSSID","wifiPsk":"YourWiFiPassword","reboot":true}'
+```
+
+Set primary + fallback Wi-Fi and reboot:
+
+```bash
+curl -sS -X POST http://<node-ip>/json/config/node \
+  -H "Content-Type: application/json" \
+  -d '{"wifiEnabled":true,"wifiSsid":"PrimarySSID","wifiPsk":"PrimaryPassword","wifiSsid2":"FallbackSSID","wifiPsk2":"FallbackPassword","reboot":true}'
 ```
 
 ## Success response

@@ -9,6 +9,7 @@
 #include "mesh/api/WiFiServerAPI.h"
 #include "target_specific.h"
 #include <WiFi.h>
+#include <algorithm>
 
 #if HAS_ETHERNET && defined(USE_WS5500)
 #include <ETHClass2.h>
@@ -61,6 +62,101 @@ WiFiUDP syslogClient;
 meshtastic::Syslog syslog(syslogClient);
 
 Periodic *wifiReconnect;
+
+namespace {
+
+constexpr size_t WIFI_MULTI_MAX = 3;
+constexpr char WIFI_MULTI_DELIM = '|';
+
+char wifiCandidateSsids[WIFI_MULTI_MAX][sizeof(config.network.wifi_ssid)] = {};
+char wifiCandidatePsks[WIFI_MULTI_MAX][sizeof(config.network.wifi_psk)] = {};
+size_t wifiCandidateCount = 0;
+size_t wifiPendingCandidateIndex = 0;
+size_t wifiNextCandidateIndex = 0;
+
+template <size_t TOKEN_SIZE>
+size_t splitDelimitedList(const char *raw, char out[][TOKEN_SIZE], size_t maxItems, bool preserveEmpty)
+{
+    if (!raw || !*raw || maxItems == 0) {
+        return 0;
+    }
+
+    const size_t rawLen = strnlen(raw, TOKEN_SIZE);
+    size_t start = 0;
+    size_t count = 0;
+    while (start <= rawLen && count < maxItems) {
+        size_t end = start;
+        while (end < rawLen && raw[end] != WIFI_MULTI_DELIM) {
+            end++;
+        }
+
+        const size_t tokenLen = end - start;
+        if (tokenLen > 0 || preserveEmpty) {
+            const size_t copyLen = std::min(tokenLen, TOKEN_SIZE - 1);
+            if (copyLen > 0) {
+                memcpy(out[count], raw + start, copyLen);
+            }
+            out[count][copyLen] = '\0';
+            count++;
+        }
+
+        if (end >= rawLen) {
+            break;
+        }
+        start = end + 1;
+    }
+
+    return count;
+}
+
+void refreshWiFiCandidatesFromConfig()
+{
+    memset(wifiCandidateSsids, 0, sizeof(wifiCandidateSsids));
+    memset(wifiCandidatePsks, 0, sizeof(wifiCandidatePsks));
+    wifiCandidateCount = 0;
+
+    char parsedSsids[WIFI_MULTI_MAX][sizeof(config.network.wifi_ssid)] = {};
+    char parsedPsks[WIFI_MULTI_MAX][sizeof(config.network.wifi_psk)] = {};
+    const size_t ssidCount = splitDelimitedList(config.network.wifi_ssid, parsedSsids, WIFI_MULTI_MAX, true);
+    const size_t pskCount = splitDelimitedList(config.network.wifi_psk, parsedPsks, WIFI_MULTI_MAX, true);
+
+    for (size_t i = 0; i < ssidCount && wifiCandidateCount < WIFI_MULTI_MAX; i++) {
+        if (parsedSsids[i][0] == '\0') {
+            continue;
+        }
+        strncpy(wifiCandidateSsids[wifiCandidateCount], parsedSsids[i], sizeof(wifiCandidateSsids[wifiCandidateCount]));
+        wifiCandidateSsids[wifiCandidateCount][sizeof(wifiCandidateSsids[wifiCandidateCount]) - 1] = '\0';
+
+        if (i < pskCount) {
+            strncpy(wifiCandidatePsks[wifiCandidateCount], parsedPsks[i], sizeof(wifiCandidatePsks[wifiCandidateCount]));
+            wifiCandidatePsks[wifiCandidateCount][sizeof(wifiCandidatePsks[wifiCandidateCount]) - 1] = '\0';
+        }
+        wifiCandidateCount++;
+    }
+
+    if (wifiCandidateCount == 0 && config.network.wifi_ssid[0]) {
+        strncpy(wifiCandidateSsids[0], config.network.wifi_ssid, sizeof(wifiCandidateSsids[0]));
+        wifiCandidateSsids[0][sizeof(wifiCandidateSsids[0]) - 1] = '\0';
+        strncpy(wifiCandidatePsks[0], config.network.wifi_psk, sizeof(wifiCandidatePsks[0]));
+        wifiCandidatePsks[0][sizeof(wifiCandidatePsks[0]) - 1] = '\0';
+        wifiCandidateCount = 1;
+    }
+
+    if (wifiCandidateCount == 0) {
+        wifiPendingCandidateIndex = 0;
+        wifiNextCandidateIndex = 0;
+        return;
+    }
+
+    if (wifiPendingCandidateIndex >= wifiCandidateCount) {
+        wifiPendingCandidateIndex = 0;
+    }
+    if (wifiNextCandidateIndex >= wifiCandidateCount) {
+        wifiNextCandidateIndex = 0;
+    }
+}
+
+} // namespace
 
 #ifdef USE_WS5500
 // Startup Ethernet
@@ -153,16 +249,22 @@ static void onNetworkConnected()
 
 static int32_t reconnectWiFi()
 {
-    const char *wifiName = config.network.wifi_ssid;
-    const char *wifiPsw = config.network.wifi_psk;
+    refreshWiFiCandidatesFromConfig();
 
     if (config.network.wifi_enabled && needReconnect) {
+        if (wifiCandidateCount == 0) {
+            LOG_WARN("WiFi is enabled but no SSID is configured");
+            needReconnect = false;
+            isReconnecting = false;
+            return 10000;
+        }
 
-        if (!*wifiPsw) // Treat empty password as no password
-            wifiPsw = NULL;
+        wifiPendingCandidateIndex = wifiNextCandidateIndex;
+        const char *wifiName = wifiCandidateSsids[wifiPendingCandidateIndex];
 
         needReconnect = false;
         isReconnecting = true;
+        wifiNextCandidateIndex = (wifiPendingCandidateIndex + 1) % wifiCandidateCount;
 
         // Make sure we clear old connection credentials
 #ifdef ARCH_ESP32
@@ -170,7 +272,7 @@ static int32_t reconnectWiFi()
 #elif defined(ARCH_RP2040)
         WiFi.disconnect(false);
 #endif
-        LOG_INFO("Reconnecting to WiFi access point %s", wifiName);
+        LOG_INFO("Reconnecting to WiFi access point %s (%u/%u)", wifiName, wifiPendingCandidateIndex + 1, wifiCandidateCount);
 
         // Start the non-blocking wait for 5 seconds
         wifiReconnectStartMillis = millis();
@@ -183,11 +285,17 @@ static int32_t reconnectWiFi()
     if (wifiReconnectPending) {
         if (millis() - wifiReconnectStartMillis >= 5000) {
             if (!WiFi.isConnected()) {
+                const char *wifiName = wifiCandidateSsids[wifiPendingCandidateIndex];
+                const char *wifiPsw = wifiCandidatePsks[wifiPendingCandidateIndex];
+                if (!*wifiPsw) { // Treat empty password as no password
+                    wifiPsw = NULL;
+                }
 #ifdef CONFIG_IDF_TARGET_ESP32C3
                 WiFi.mode(WIFI_MODE_NULL);
                 WiFi.useStaticBuffers(true);
                 WiFi.mode(WIFI_STA);
 #endif
+                LOG_DEBUG("Joining WiFi candidate %s", wifiName);
                 WiFi.begin(wifiName, wifiPsw);
             }
             isReconnecting = false;
@@ -268,10 +376,8 @@ void deinitWifi()
 // Startup WiFi
 bool initWifi()
 {
-    if (config.network.wifi_enabled && config.network.wifi_ssid[0]) {
-
-        const char *wifiName = config.network.wifi_ssid;
-        const char *wifiPsw = config.network.wifi_psk;
+    refreshWiFiCandidatesFromConfig();
+    if (config.network.wifi_enabled && wifiCandidateCount > 0) {
 
 #ifndef ARCH_RP2040
 #if !MESHTASTIC_EXCLUDE_WEBSERVER
@@ -279,53 +385,51 @@ bool initWifi()
 #endif
         WiFi.persistent(false); // Disable flash storage for WiFi credentials
 #endif
-        if (!*wifiPsw) // Treat empty password as no password
-            wifiPsw = NULL;
+        uint8_t dmac[6];
+        getMacAddr(dmac);
+        snprintf(ourHost, sizeof(ourHost), "Meshtastic-%02x%02x", dmac[4], dmac[5]);
 
-        if (*wifiName) {
-            uint8_t dmac[6];
-            getMacAddr(dmac);
-            snprintf(ourHost, sizeof(ourHost), "Meshtastic-%02x%02x", dmac[4], dmac[5]);
+        WiFi.mode(WIFI_STA);
+        WiFi.setHostname(ourHost);
 
-            WiFi.mode(WIFI_STA);
-            WiFi.setHostname(ourHost);
-
-            if (config.network.address_mode == meshtastic_Config_NetworkConfig_AddressMode_STATIC &&
-                config.network.ipv4_config.ip != 0) {
+        if (config.network.address_mode == meshtastic_Config_NetworkConfig_AddressMode_STATIC &&
+            config.network.ipv4_config.ip != 0) {
 #ifdef ARCH_ESP32
-                WiFi.config(config.network.ipv4_config.ip, config.network.ipv4_config.gateway, config.network.ipv4_config.subnet,
-                            config.network.ipv4_config.dns);
+            WiFi.config(config.network.ipv4_config.ip, config.network.ipv4_config.gateway, config.network.ipv4_config.subnet,
+                        config.network.ipv4_config.dns);
 #elif defined(ARCH_RP2040)
-                WiFi.config(config.network.ipv4_config.ip, config.network.ipv4_config.dns, config.network.ipv4_config.gateway,
-                            config.network.ipv4_config.subnet);
+            WiFi.config(config.network.ipv4_config.ip, config.network.ipv4_config.dns, config.network.ipv4_config.gateway,
+                        config.network.ipv4_config.subnet);
 #endif
-            }
-#ifdef ARCH_ESP32
-            WiFi.onEvent(WiFiEvent);
-            WiFi.setAutoReconnect(true);
-            WiFi.setSleep(false);
-
-            // This is needed to improve performance.
-            esp_wifi_set_ps(WIFI_PS_NONE); // Disable radio power saving
-
-            WiFi.onEvent(
-                [](WiFiEvent_t event, WiFiEventInfo_t info) {
-                    LOG_WARN("WiFi lost connection. Reason: %d", info.wifi_sta_disconnected.reason);
-
-                    /*
-                        If we are disconnected from the AP for some reason,
-                        save the error code.
-
-                        For a reference to the codes:
-                            https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/wifi.html#wi-fi-reason-code
-                    */
-                    wifiDisconnectReason = info.wifi_sta_disconnected.reason;
-                },
-                WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
-#endif
-            LOG_DEBUG("JOINING WIFI soon: ssid=%s", wifiName);
-            wifiReconnect = new Periodic("WifiConnect", reconnectWiFi);
         }
+#ifdef ARCH_ESP32
+        WiFi.onEvent(WiFiEvent);
+        WiFi.setAutoReconnect(true);
+        WiFi.setSleep(false);
+
+        // This is needed to improve performance.
+        esp_wifi_set_ps(WIFI_PS_NONE); // Disable radio power saving
+
+        WiFi.onEvent(
+            [](WiFiEvent_t event, WiFiEventInfo_t info) {
+                LOG_WARN("WiFi lost connection. Reason: %d", info.wifi_sta_disconnected.reason);
+
+                /*
+                    If we are disconnected from the AP for some reason,
+                    save the error code.
+
+                    For a reference to the codes:
+                        https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/wifi.html#wi-fi-reason-code
+                */
+                wifiDisconnectReason = info.wifi_sta_disconnected.reason;
+            },
+            WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+#endif
+        LOG_INFO("Configured %u WiFi network(s); primary=%s", wifiCandidateCount, wifiCandidateSsids[0]);
+        wifiNextCandidateIndex = 0;
+        wifiPendingCandidateIndex = 0;
+        LOG_DEBUG("JOINING WIFI soon: ssid=%s", wifiCandidateSsids[0]);
+        wifiReconnect = new Periodic("WifiConnect", reconnectWiFi);
         return true;
     } else {
         LOG_INFO("Not using WIFI");
@@ -372,6 +476,8 @@ static void WiFiEvent(WiFiEvent_t event)
         break;
     case ARDUINO_EVENT_WIFI_STA_CONNECTED:
         LOG_INFO("Connected to access point");
+        // Keep trying this AP first after successful association.
+        wifiNextCandidateIndex = wifiPendingCandidateIndex;
         if (config.network.ipv6_enabled) {
 #if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
             if (!WiFi.enableIPv6()) {

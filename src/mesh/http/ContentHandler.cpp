@@ -82,6 +82,8 @@ constexpr size_t MAX_CHAT_JSON_BODY = 768;
 constexpr size_t MAX_CHAT_LIMIT = 100;
 constexpr size_t DEFAULT_CHAT_LIMIT = 30;
 constexpr size_t MAX_CONFIG_JSON_BODY = 640;
+constexpr size_t WIFI_MULTI_MAX_NETWORKS = 3;
+constexpr char WIFI_MULTI_DELIM = '|';
 
 void setJsonCorsHeaders(HTTPResponse *res, const char *methods)
 {
@@ -202,6 +204,73 @@ bool copyBoundedString(const std::string &src, char *dest, size_t destSize)
     strncpy(dest, src.c_str(), destSize);
     dest[destSize - 1] = '\0';
     return true;
+}
+
+std::vector<std::string> splitWifiList(const char *raw, bool preserveEmpty)
+{
+    std::vector<std::string> out;
+    if (!raw || !*raw) {
+        return out;
+    }
+
+    const std::string input(raw);
+    size_t start = 0;
+    while (start <= input.size() && out.size() < WIFI_MULTI_MAX_NETWORKS) {
+        const size_t sep = input.find(WIFI_MULTI_DELIM, start);
+        const std::string token = (sep == std::string::npos) ? input.substr(start) : input.substr(start, sep - start);
+        if (preserveEmpty || !token.empty()) {
+            out.push_back(token);
+        }
+        if (sep == std::string::npos) {
+            break;
+        }
+        start = sep + 1;
+    }
+    return out;
+}
+
+void decodeWifiCredentialSlots(std::vector<std::string> &ssidSlots, std::vector<std::string> &pskSlots)
+{
+    ssidSlots.assign(WIFI_MULTI_MAX_NETWORKS, "");
+    pskSlots.assign(WIFI_MULTI_MAX_NETWORKS, "");
+
+    const auto ssids = splitWifiList(config.network.wifi_ssid, true);
+    const auto psks = splitWifiList(config.network.wifi_psk, true);
+    for (size_t i = 0; i < ssids.size() && i < WIFI_MULTI_MAX_NETWORKS; i++) {
+        ssidSlots[i] = ssids[i];
+    }
+    for (size_t i = 0; i < psks.size() && i < WIFI_MULTI_MAX_NETWORKS; i++) {
+        pskSlots[i] = psks[i];
+    }
+}
+
+void encodeWifiCredentialSlots(const std::vector<std::string> &ssidSlots, const std::vector<std::string> &pskSlots, std::string &outSsids,
+                               std::string &outPsks)
+{
+    outSsids.clear();
+    outPsks.clear();
+
+    size_t lastUsed = 0;
+    bool hasAny = false;
+    for (size_t i = 0; i < WIFI_MULTI_MAX_NETWORKS; i++) {
+        if (!ssidSlots[i].empty()) {
+            lastUsed = i;
+            hasAny = true;
+        }
+    }
+
+    if (!hasAny) {
+        return;
+    }
+
+    for (size_t i = 0; i <= lastUsed; i++) {
+        if (i > 0) {
+            outSsids.push_back(WIFI_MULTI_DELIM);
+            outPsks.push_back(WIFI_MULTI_DELIM);
+        }
+        outSsids += ssidSlots[i];
+        outPsks += pskSlots[i];
+    }
 }
 
 void maybeScheduleReboot(bool rebootRequested)
@@ -568,10 +637,39 @@ void handleJsonNodeConfig(HTTPRequest *req, HTTPResponse *res)
         ownerJson["short_name"] = new JSONValue(owner.short_name);
         ownerJson["node_num"] = new JSONValue((double)nodeDB->getNodeNum());
 
+        std::vector<std::string> wifiSsids;
+        std::vector<std::string> wifiPsks;
+        decodeWifiCredentialSlots(wifiSsids, wifiPsks);
+
+        size_t wifiCount = 0;
+        for (size_t i = 0; i < WIFI_MULTI_MAX_NETWORKS; i++) {
+            if (!wifiSsids[i].empty()) {
+                wifiCount++;
+            }
+        }
+
         JSONObject wifiJson;
         wifiJson["enabled"] = new JSONValue(config.network.wifi_enabled);
-        wifiJson["ssid"] = new JSONValue(config.network.wifi_ssid);
-        wifiJson["psk_set"] = new JSONValue(config.network.wifi_psk[0] != '\0');
+        wifiJson["ssid"] = new JSONValue(wifiSsids[0].c_str());
+        wifiJson["ssid2"] = new JSONValue(wifiSsids[1].c_str());
+        wifiJson["ssid3"] = new JSONValue(wifiSsids[2].c_str());
+        wifiJson["psk_set"] = new JSONValue(!wifiPsks[0].empty());
+        wifiJson["psk_set2"] = new JSONValue(!wifiPsks[1].empty());
+        wifiJson["psk_set3"] = new JSONValue(!wifiPsks[2].empty());
+        wifiJson["network_count"] = new JSONValue((double)wifiCount);
+
+        JSONArray wifiNetworks;
+        for (size_t i = 0; i < WIFI_MULTI_MAX_NETWORKS; i++) {
+            if (wifiSsids[i].empty()) {
+                continue;
+            }
+            JSONObject network;
+            network["index"] = new JSONValue((double)(i + 1));
+            network["ssid"] = new JSONValue(wifiSsids[i].c_str());
+            network["psk_set"] = new JSONValue(!wifiPsks[i].empty());
+            wifiNetworks.push_back(new JSONValue(network));
+        }
+        wifiJson["networks"] = new JSONValue(wifiNetworks);
 
         JSONObject data;
         data["owner"] = new JSONValue(ownerJson);
@@ -617,7 +715,12 @@ void handleJsonNodeConfig(HTTPRequest *req, HTTPResponse *res)
     JSONObject json = parsed->AsObject();
     bool ownerChanged = false;
     bool wifiChanged = false;
+    bool wifiCredentialsProvided = false;
     bool hasAnyField = false;
+
+    std::vector<std::string> wifiSsids;
+    std::vector<std::string> wifiPsks;
+    decodeWifiCredentialSlots(wifiSsids, wifiPsks);
 
     auto longNameIt = json.find("longName");
     if (longNameIt != json.end()) {
@@ -666,31 +769,150 @@ void handleJsonNodeConfig(HTTPRequest *req, HTTPResponse *res)
     auto wifiSsidIt = json.find("wifiSsid");
     if (wifiSsidIt != json.end()) {
         hasAnyField = true;
+        wifiCredentialsProvided = true;
         if (!wifiSsidIt->second->IsString()) {
             writeJsonStatus(res, 400, "error", "field_wifiSsid_invalid");
             return;
         }
         const std::string ssid = wifiSsidIt->second->AsString();
-        if (!copyBoundedString(ssid, config.network.wifi_ssid, sizeof(config.network.wifi_ssid))) {
+        if (ssid.size() >= sizeof(config.network.wifi_ssid)) {
             writeJsonStatus(res, 400, "error", "field_wifiSsid_too_long");
             return;
         }
-        wifiChanged = true;
+        if (wifiSsids[0] != ssid) {
+            wifiSsids[0] = ssid;
+            wifiChanged = true;
+        }
     }
 
     auto wifiPskIt = json.find("wifiPsk");
     if (wifiPskIt != json.end()) {
         hasAnyField = true;
+        wifiCredentialsProvided = true;
         if (!wifiPskIt->second->IsString()) {
             writeJsonStatus(res, 400, "error", "field_wifiPsk_invalid");
             return;
         }
         const std::string psk = wifiPskIt->second->AsString();
-        if (!copyBoundedString(psk, config.network.wifi_psk, sizeof(config.network.wifi_psk))) {
+        if (psk.size() >= sizeof(config.network.wifi_psk)) {
             writeJsonStatus(res, 400, "error", "field_wifiPsk_too_long");
             return;
         }
-        wifiChanged = true;
+        if (wifiPsks[0] != psk) {
+            wifiPsks[0] = psk;
+            wifiChanged = true;
+        }
+    }
+
+    auto wifiSsid2It = json.find("wifiSsid2");
+    if (wifiSsid2It != json.end()) {
+        hasAnyField = true;
+        wifiCredentialsProvided = true;
+        if (!wifiSsid2It->second->IsString()) {
+            writeJsonStatus(res, 400, "error", "field_wifiSsid2_invalid");
+            return;
+        }
+        const std::string ssid = wifiSsid2It->second->AsString();
+        if (ssid.size() >= sizeof(config.network.wifi_ssid)) {
+            writeJsonStatus(res, 400, "error", "field_wifiSsid2_too_long");
+            return;
+        }
+        if (wifiSsids[1] != ssid) {
+            wifiSsids[1] = ssid;
+            wifiChanged = true;
+        }
+    }
+
+    auto wifiPsk2It = json.find("wifiPsk2");
+    if (wifiPsk2It != json.end()) {
+        hasAnyField = true;
+        wifiCredentialsProvided = true;
+        if (!wifiPsk2It->second->IsString()) {
+            writeJsonStatus(res, 400, "error", "field_wifiPsk2_invalid");
+            return;
+        }
+        const std::string psk = wifiPsk2It->second->AsString();
+        if (psk.size() >= sizeof(config.network.wifi_psk)) {
+            writeJsonStatus(res, 400, "error", "field_wifiPsk2_too_long");
+            return;
+        }
+        if (wifiPsks[1] != psk) {
+            wifiPsks[1] = psk;
+            wifiChanged = true;
+        }
+    }
+
+    auto wifiSsid3It = json.find("wifiSsid3");
+    if (wifiSsid3It != json.end()) {
+        hasAnyField = true;
+        wifiCredentialsProvided = true;
+        if (!wifiSsid3It->second->IsString()) {
+            writeJsonStatus(res, 400, "error", "field_wifiSsid3_invalid");
+            return;
+        }
+        const std::string ssid = wifiSsid3It->second->AsString();
+        if (ssid.size() >= sizeof(config.network.wifi_ssid)) {
+            writeJsonStatus(res, 400, "error", "field_wifiSsid3_too_long");
+            return;
+        }
+        if (wifiSsids[2] != ssid) {
+            wifiSsids[2] = ssid;
+            wifiChanged = true;
+        }
+    }
+
+    auto wifiPsk3It = json.find("wifiPsk3");
+    if (wifiPsk3It != json.end()) {
+        hasAnyField = true;
+        wifiCredentialsProvided = true;
+        if (!wifiPsk3It->second->IsString()) {
+            writeJsonStatus(res, 400, "error", "field_wifiPsk3_invalid");
+            return;
+        }
+        const std::string psk = wifiPsk3It->second->AsString();
+        if (psk.size() >= sizeof(config.network.wifi_psk)) {
+            writeJsonStatus(res, 400, "error", "field_wifiPsk3_too_long");
+            return;
+        }
+        if (wifiPsks[2] != psk) {
+            wifiPsks[2] = psk;
+            wifiChanged = true;
+        }
+    }
+
+    if (wifiCredentialsProvided) {
+        if (wifiSsids[0].empty() && !wifiPsks[0].empty()) {
+            writeJsonStatus(res, 400, "error", "field_wifiPsk_without_ssid");
+            return;
+        }
+        if (wifiSsids[1].empty() && !wifiPsks[1].empty()) {
+            writeJsonStatus(res, 400, "error", "field_wifiPsk2_without_ssid");
+            return;
+        }
+        if (wifiSsids[2].empty() && !wifiPsks[2].empty()) {
+            writeJsonStatus(res, 400, "error", "field_wifiPsk3_without_ssid");
+            return;
+        }
+
+        std::string encodedSsids;
+        std::string encodedPsks;
+        encodeWifiCredentialSlots(wifiSsids, wifiPsks, encodedSsids, encodedPsks);
+        if (encodedSsids.size() >= sizeof(config.network.wifi_ssid)) {
+            writeJsonStatus(res, 400, "error", "field_wifiSsid_too_long");
+            return;
+        }
+        if (encodedPsks.size() >= sizeof(config.network.wifi_psk)) {
+            writeJsonStatus(res, 400, "error", "field_wifiPsk_too_long");
+            return;
+        }
+        if (!copyBoundedString(encodedSsids, config.network.wifi_ssid, sizeof(config.network.wifi_ssid))) {
+            writeJsonStatus(res, 400, "error", "field_wifiSsid_too_long");
+            return;
+        }
+        if (!copyBoundedString(encodedPsks, config.network.wifi_psk, sizeof(config.network.wifi_psk))) {
+            writeJsonStatus(res, 400, "error", "field_wifiPsk_too_long");
+            return;
+        }
     }
 
     if (!hasAnyField) {
