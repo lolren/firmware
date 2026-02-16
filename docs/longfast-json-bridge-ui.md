@@ -11,14 +11,14 @@ It runs on your PC and proxies requests to the node JSON API over LAN.
 
 ## Files
 
-- `tools/longfast_json_bridge/longfast_json_bridge_web.py`
-- `tools/longfast_json_bridge/index.html`
+- `longfast_json_bridge/pc_webserver/longfast_json_bridge_web.py`
+- `longfast_json_bridge/pc_webserver/index.html`
 
 ## Start the UI server
 
 ```bash
-cd /home/lolren/Desktop/Meshtastic_bot
-python3 tools/longfast_json_bridge/longfast_json_bridge_web.py \
+cd <repo-root>
+python3 longfast_json_bridge/pc_webserver/longfast_json_bridge_web.py \
   --host 0.0.0.0 \
   --port 8765 \
   --esp-base-url http://<node-ip>

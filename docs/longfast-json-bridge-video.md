@@ -7,7 +7,7 @@ This repository includes a generated explainer video:
 ## Regenerate the video
 
 ```bash
-cd /home/lolren/Desktop/Meshtastic_bot
+cd <repo-root>
 tools/longfast_json_bridge/make_explainer_video.sh
 ```
 

@@ -1,39 +1,57 @@
-<div align="center" markdown="1">
+# LongFast JSON Bridge
 
-<img src=".github/meshtastic_logo.png" alt="Meshtastic Logo" width="80"/>
-<h1>Meshtastic Firmware</h1>
+This repository is a LoRa JSON bridge project with two parts:
 
-![GitHub release downloads](https://img.shields.io/github/downloads/meshtastic/firmware/total)
-[![CI](https://img.shields.io/github/actions/workflow/status/meshtastic/firmware/main_matrix.yml?branch=master&label=actions&logo=github&color=yellow)](https://github.com/meshtastic/firmware/actions/workflows/ci.yml)
-[![CLA assistant](https://cla-assistant.io/readme/badge/meshtastic/firmware)](https://cla-assistant.io/meshtastic/firmware)
-[![Fiscal Contributors](https://opencollective.com/meshtastic/tiers/badge.svg?label=Fiscal%20Contributors&color=deeppink)](https://opencollective.com/meshtastic/)
-[![Vercel](https://img.shields.io/static/v1?label=Powered%20by&message=Vercel&style=flat&logo=vercel&color=000000)](https://vercel.com?utm_source=meshtastic&utm_campaign=oss)
+1. Firmware changes for a Heltec V3 node that add JSON chat + node-config endpoints.
+2. A PC-hosted webserver/UI that proxies browser requests to the node.
 
-<a href="https://trendshift.io/repositories/5524" target="_blank"><img src="https://trendshift.io/api/badge/repositories/5524" alt="meshtastic%2Ffirmware | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+The repository contains a full firmware tree because the firmware build system depends on it, but the custom bridge logic is isolated and documented below.
 
-</div>
+## Start Here
 
-</div>
+- Main guide: `LONGFAST_JSON_BRIDGE.md`
+- Organized project entry: `longfast_json_bridge/README.md`
+- Custom code map: `longfast_json_bridge/WHAT_IS_CUSTOM.md`
 
-<div align="center">
-	<a href="https://meshtastic.org">Website</a>
-	-
-	<a href="https://meshtastic.org/docs/">Documentation</a>
-</div>
+## Quick Run (PC Web UI)
 
-## Overview
+```bash
+./longfast_json_bridge/pc_webserver/run.sh 192.168.1.169
+```
 
-This repository contains the official device firmware for Meshtastic, an open-source LoRa mesh networking project designed for long-range, low-power communication without relying on internet or cellular infrastructure. The firmware supports various hardware platforms, including ESP32, nRF52, RP2040/RP2350, and Linux-based devices.
+Open `http://127.0.0.1:8765`.
 
-Meshtastic enables text messaging, location sharing, and telemetry over a decentralized mesh network, making it ideal for outdoor adventures, emergency preparedness, and remote operations.
+## Quick Flash (Heltec V3)
 
-### Get Started
+```bash
+.venv/bin/pio run -e heltec-v3 -t upload --upload-port /dev/ttyUSB0
+```
 
-- 🔧 **[Building Instructions](https://meshtastic.org/docs/development/firmware/build)** – Learn how to compile the firmware from source.
-- ⚡ **[Flashing Instructions](https://meshtastic.org/docs/getting-started/flashing-firmware/)** – Install or update the firmware on your device.
+If Wi-Fi is not set yet, use USB CLI first (details in `longfast_json_bridge/firmware/README.md`).
 
-Join our community and help improve Meshtastic! 🚀
+## What Is Custom In This Repo
 
-## Stats
+- Firmware endpoint registration and handlers:
+  - `src/mesh/http/ContentHandler.cpp`
+  - `src/mesh/http/ContentHandler.h`
+- PC bridge server and browser UI:
+  - `longfast_json_bridge/pc_webserver/longfast_json_bridge_web.py`
+  - `longfast_json_bridge/pc_webserver/index.html`
+  - `longfast_json_bridge/pc_webserver/run.sh`
+- Bridge docs and setup:
+  - `docs/longfast-json-bridge.md`
+  - `docs/longfast-json-bridge-ui.md`
+  - `docs/longfast-json-chat-api.md`
+  - `docs/node-config-json-api.md`
 
-![Alt](https://repobeats.axiom.co/api/embed/8025e56c482ec63541593cc5bd322c19d5c0bdcf.svg "Repobeats analytics image")
+## Endpoints Added By This Project
+
+- `POST /json/chat/send`
+- `GET /json/chat/messages`
+- `GET /json/config/node`
+- `POST /json/config/node`
+
+## Notes
+
+- This project is firmware-fork based.
+- Security is LAN-trust oriented by default; do not expose these endpoints directly to the public internet.

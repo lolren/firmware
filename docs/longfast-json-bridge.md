@@ -1,8 +1,10 @@
 # LongFast JSON Bridge
 
-`LongFast JSON Bridge` is a Meshtastic firmware extension + local web interface for JSON-first chat and node control over Wi-Fi.
+`LongFast JSON Bridge` is a firmware-fork project + local web interface for JSON-first chat and node control over Wi-Fi.
 
 It is designed for users who want to build custom interfaces without depending on the stock web client.
+
+Custom file map: `longfast_json_bridge/WHAT_IS_CUSTOM.md`
 
 ## What It Adds
 
@@ -15,8 +17,8 @@ Firmware endpoints:
 
 Local UI bundle:
 
-- `tools/longfast_json_bridge/longfast_json_bridge_web.py`
-- `tools/longfast_json_bridge/index.html`
+- `longfast_json_bridge/pc_webserver/longfast_json_bridge_web.py`
+- `longfast_json_bridge/pc_webserver/index.html`
 
 ## Features
 
@@ -38,7 +40,7 @@ Local UI bundle:
 ### 1) Clone and build
 
 ```bash
-git clone https://github.com/meshtastic/firmware.git
+git clone https://github.com/lolren/firmware.git
 cd firmware
 pio run -e heltec-v3
 ```
@@ -68,17 +70,30 @@ curl -sS http://<node-ip>/json/chat/messages?limit=5
 
 ### 5) Start the local bridge UI
 
+Simple wrapper:
+
 ```bash
-python3 tools/longfast_json_bridge/longfast_json_bridge_web.py \
+./longfast_json_bridge/pc_webserver/run.sh http://<node-ip>
+```
+
+`run.sh` also accepts a bare host/IP like `192.168.1.169` (it auto-adds `http://`).
+
+Direct Python entrypoint:
+
+```bash
+python3 longfast_json_bridge/pc_webserver/longfast_json_bridge_web.py \
   --host 0.0.0.0 \
   --port 8765 \
   --esp-base-url http://<node-ip>
 ```
 
+`--esp-base-url` also accepts a bare host/IP like `192.168.1.169`.
+
 Open `http://127.0.0.1:8765`.
 
 ## Documentation Map
 
+- Complete endpoint reference: `longfast_json_bridge/API_ENDPOINTS.md`
 - Chat API: `docs/longfast-json-chat-api.md`
 - Node Config API: `docs/node-config-json-api.md`
 - Web UI usage: `docs/longfast-json-bridge-ui.md`
