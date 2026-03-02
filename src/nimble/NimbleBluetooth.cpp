@@ -52,6 +52,14 @@ NimBLEServer *bleServer;
 static bool passkeyShowing;
 static std::atomic<uint16_t> nimbleBluetoothConnHandle{BLE_HS_CONN_HANDLE_NONE}; // BLE_HS_CONN_HANDLE_NONE means "no connection"
 
+static void printBlePasskeyToSerial(uint32_t passkey)
+{
+    // Intentionally write directly to Serial so users can recover pairing when display is unavailable.
+    LOG_INFO("*** Enter passkey %06u on the peer side ***", passkey);
+    Serial.printf("\n[BLE] Pairing passkey: %06u\n", (unsigned int)passkey);
+    Serial.flush();
+}
+
 class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
 {
     /*
@@ -580,7 +588,7 @@ class NimbleBluetoothServerCallback : public NimBLEServerCallbacks
             // This is the passkey to be entered on peer - we pick a number >100,000 to ensure 6 digits
             passkey = random(100000, 999999);
         }
-        LOG_INFO("*** Enter passkey %d on the peer side ***", passkey);
+        printBlePasskeyToSerial(passkey);
 
         powerFSM.trigger(EVENT_BLUETOOTH_PAIR);
         meshtastic::BluetoothStatus newStatus(std::to_string(passkey));
